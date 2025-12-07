@@ -17,6 +17,8 @@ warnings.filterwarnings("ignore")
 config = configparser.ConfigParser()
 config.read('config.ini')
 
+#.\.venv\Scripts\Activate.ps1
+
 async def main():
     pretty_print("Initializing...", color="status")
     stealth_mode = config.getboolean('BROWSER', 'stealth_mode')
