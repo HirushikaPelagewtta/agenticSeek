@@ -77,6 +77,11 @@ async def chat(query: Query):
         if success:
             response_text = str(global_interaction.last_answer)
             
+            print("\n" + "="*40)
+            print(f"RAW AGENT OUTPUT ({len(response_text)} chars):")
+            print(response_text)
+            print("="*40 + "\n")
+            # --------------------------------
             # --- ARC SPECIFIC LOGIC (Runs for ARC, fails silently for BIG-bench) ---
             grid_pattern = r"\[\s*\[\s*\d+.*\]\s*\]"
             
