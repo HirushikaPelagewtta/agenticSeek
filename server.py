@@ -11,8 +11,8 @@ from sources.interaction import Interaction
 from sources.agents import Agent, CoderAgent, CasualAgent, FileAgent, PlannerAgent, BrowserAgent, McpAgent
 from sources.browser import Browser, create_driver
 
-# 1. INITIALIZATION (Global Scope - Runs Once)
-print("--- SERVER STARTUP: INITIALIZING AGENTS ---")
+# 1. INITIALIZATION
+print("--- SERVER STARTUP ---")
 config = configparser.ConfigParser()
 config.read('config.ini')
 
@@ -33,8 +33,8 @@ browser = Browser(
     anticaptcha_manual_install=stealth_mode
 )
 
-# Agents are heavy (prompts), so we load them once and keep them globally
-agents = [
+# Load all agents
+all_agents = [
     CasualAgent(name=config["MAIN"]["agent_name"], prompt_path=f"prompts/{personality_folder}/casual_agent.txt", provider=provider, verbose=False),
     CoderAgent(name="coder", prompt_path=f"prompts/{personality_folder}/coder_agent.txt", provider=provider, verbose=False),
     FileAgent(name="File Agent", prompt_path=f"prompts/{personality_folder}/file_agent.txt", provider=provider, verbose=False),
@@ -42,34 +42,36 @@ agents = [
     PlannerAgent(name="Planner", prompt_path=f"prompts/{personality_folder}/planner_agent.txt", provider=provider, verbose=False, browser=browser),
 ]
 
-# Create a global interaction holder
-global_interaction = Interaction(agents, tts_enabled=False, stt_enabled=False, recover_last_session=False, langs=languages)
+# Standard Interaction (All agents)
+global_interaction = Interaction(all_agents, tts_enabled=False, stt_enabled=False, recover_last_session=False, langs=languages)
 
-print("--- AGENTS READY. WAITING FOR REQUESTS ---")
+print("--- SERVER READY ---")
 
 app = FastAPI()
 
 class Query(BaseModel):
     prompt: str
-    new_session: bool = False  # <--- NEW PARAMETER
+    new_session: bool = False
+    benchmark_mode: bool = False 
 
 @app.post("/chat")
 async def chat(query: Query):
     global global_interaction
     
     try:
-        # --- MEMORY RESET LOGIC ---
-        if query.new_session:
-            print(">>> RESETTING MEMORY for new task <<<")
-            # We re-initialize the interaction object to wipe history
+        # --- BENCHMARK MODE: FORCE CASUAL AGENT (For HumanEval) ---
+        if query.benchmark_mode:
+            print(">>> BENCHMARK MODE: Using CasualAgent ONLY <<<")
+            casual_only = [all_agents[0]] 
             global_interaction = Interaction(
-                agents, 
-                tts_enabled=False, 
-                stt_enabled=False, 
-                recover_last_session=False, 
-                langs=languages
+                casual_only, tts_enabled=False, stt_enabled=False, recover_last_session=False, langs=languages
             )
-        # --------------------------
+        # --- STANDARD RESET ---
+        elif query.new_session:
+            print(">>> RESETTING MEMORY (Standard Mode) <<<")
+            global_interaction = Interaction(
+                all_agents, tts_enabled=False, stt_enabled=False, recover_last_session=False, langs=languages
+            )
 
         global_interaction.set_query(query.prompt)
         success = await global_interaction.think()
@@ -77,31 +79,28 @@ async def chat(query: Query):
         if success:
             response_text = str(global_interaction.last_answer)
             
-            print("\n" + "="*40)
-            print(f"RAW AGENT OUTPUT ({len(response_text)} chars):")
-            print(response_text)
-            print("="*40 + "\n")
-            # --------------------------------
-            # --- ARC SPECIFIC LOGIC (Runs for ARC, fails silently for BIG-bench) ---
-            grid_pattern = r"\[\s*\[\s*\d+.*\]\s*\]"
+            # --- UNIVERSAL BLOCK UNPACKER (Fixes GAIA & ARC & HumanEval) ---
+            # If the response hides data behind "block:X", we pull it out.
+            try:
+                blocks = global_interaction.get_last_blocks_result()
+                if blocks:
+                    print(f"DEBUG: Found {len(blocks)} internal blocks.")
+                    for block in blocks:
+                        # 1. Append Source Code (Good for HumanEval)
+                        code_content = block.get('code', '')
+                        if code_content:
+                            response_text += f"\n\n```python\n{code_content}\n```"
+                        
+                        # 2. Append Execution Output (CRITICAL FOR GAIA)
+                        # This extracts what the script printed (e.g., "17")
+                        output_content = str(block.get('output', ''))
+                        if output_content:
+                            print(f"DEBUG: Appending tool output: {output_content[:20]}...")
+                            response_text += f"\n\nOUTPUT:\n{output_content}"
+            except Exception as e:
+                print(f"DEBUG: Block extraction warning: {e}")
+            # ---------------------------------------------------------------
             
-            # Only run the heavy regex/block check if we suspect a grid is missing
-            # and if the user didn't ask a purely text question
-            if not re.search(grid_pattern, response_text, re.DOTALL):
-                try:
-                    blocks = global_interaction.get_last_blocks_result()
-                    for block in reversed(blocks):
-                        output = str(block.get('output', ''))
-                        match = re.search(grid_pattern, output, re.DOTALL)
-                        if match:
-                            found_grid = match.group(0)
-                            print(f"DEBUG: Recovered grid from code output!")
-                            response_text += "\n" + found_grid
-                            break
-                except Exception:
-                    pass 
-            # -----------------------------------------------------------------------
-
             return {"response": response_text}
         else:
             return {"response": "Error: Agent declined to answer."}
