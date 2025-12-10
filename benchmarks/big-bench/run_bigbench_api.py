@@ -6,8 +6,8 @@ import os
 
 # --- CONFIGURATION ---
 API_URL = "http://127.0.0.1:8000/chat"
-TASK_FILE = "benchmarks/big-bench/task.json"  # Make sure this file exists!
-MAX_TASKS = 10           # How many questions to run (set to -1 for all)
+TASK_FILE = "benchmarks/big-bench/Object_Counting/task.json"  # Make sure this file exists!
+MAX_TASKS = 10          # How many questions to run (set to -1 for all)
 
 def normalize_text(text):
     """
@@ -67,45 +67,144 @@ print(f"Found {len(examples)} examples. Starting API Benchmark on {MAX_TASKS}...
 
 results = []
 
-# --- MAIN LOOP (Updated) ---
+# # --- MAIN LOOP For Task Casual Judgement
+# for i, example in enumerate(examples):
+#     if MAX_TASKS > 0 and i >= MAX_TASKS: break
+    
+#     # 1. DETERMINE CORRECT TARGETS
+#     valid_targets = []
+#     if 'target' in example and isinstance(example['target'], str):
+#         valid_targets.append(example['target'])
+#     if 'target_scores' in example:
+#         scores = example['target_scores']
+#         max_score = max(scores.values())
+#         valid_targets.extend([k for k, v in scores.items() if v == max_score])
+        
+#         # ALSO: Get ALL options for the prompt (including wrong ones)
+#         # This helps the agent see what it can choose from
+#         all_options = list(scores.keys())
+#     else:
+#         all_options = valid_targets # Fallback
+
+#     print(f"\nTask {i+1}")
+    
+#     # 2. CONSTRUCT PROMPT (The Fix)
+#     input_text = example['input']
+    
+#     # We create a string like "Options: [Yes, No]"
+#     options_display = ", ".join(f"'{opt}'" for opt in all_options)
+    
+#     full_prompt = (
+#         "You are a logical reasoning expert taking a multiple-choice test.\n"
+#         f"QUESTION: {input_text}\n"
+#         f"AVAILABLE OPTIONS: [{options_display}]\n"
+#         "INSTRUCTIONS:\n"
+#         "1. Analyze the scenario.\n"
+#         "2. Select the best option from the list above.\n"
+#         "3. Your FINAL line must be ONLY the exact option text (e.g. 'Yes').\n"
+#         "YOUR ANSWER:"
+#     )
+
+#     # 3. SEND REQUEST
+#     start = time.time()
+#     status = "FAIL"
+#     payload = {"prompt": full_prompt, "new_session": True}
+
+#     try:
+#         resp = requests.post(API_URL, json=payload, timeout=600)
+        
+#         if resp.status_code == 200:
+#             data = resp.json()
+#             raw_output = str(data.get("response", ""))
+            
+#             # 4. EXTRACTION & SCORING
+#             agent_answer = robust_answer_extraction(raw_output)
+#             clean_agent = normalize_text(agent_answer)
+            
+#             is_correct = False
+#             for t in valid_targets:
+#                 clean_target = normalize_text(t)
+#                 # Check for exact word match
+#                 if clean_target == clean_agent: # Strict match is safer now
+#                     is_correct = True
+#                     break
+#                 # Fallback: if agent says "Answer: Yes", clean_agent might be "yes"
+#                 elif clean_target in clean_agent.split():
+#                     is_correct = True
+#                     break
+            
+#             if is_correct:
+#                 status = "PASS"
+#             else:
+#                 status = "WRONG_ANSWER"
+#         else:
+#             status = f"HTTP_ERROR_{resp.status_code}"
+#             raw_output = resp.text
+#             agent_answer = "HTTP Error"
+
+#     except requests.exceptions.Timeout:
+#         status = "TIMEOUT"
+#         agent_answer = "Timeout"
+#     except Exception as e:
+#         status = f"ERROR: {str(e)}"
+#         agent_answer = f"Exception: {e}"
+
+#     duration = time.time() - start
+#     print(f"  -> {status} ({duration:.2f}s)")
+    
+#     if status != "PASS":
+#         print(f"     [EXPECTED]: {valid_targets}")
+#         print(f"     [AGENT]:    '{agent_answer}'") 
+
+#     results.append({"id": i, "status": status})
+
+
+# --- MAIN LOOP (Fixed for Integers) ---
 for i, example in enumerate(examples):
     if MAX_TASKS > 0 and i >= MAX_TASKS: break
     
-    # 1. DETERMINE CORRECT TARGETS
     valid_targets = []
-    if 'target' in example and isinstance(example['target'], str):
-        valid_targets.append(example['target'])
+    all_options = []
+
+    # 1. HANDLE 'target' (String, Integer, or List)
+    if 'target' in example:
+        raw = example['target']
+        # If it's a list (some tasks have multiple correct answers), add all
+        if isinstance(raw, list):
+            valid_targets.extend([str(item) for item in raw])
+        # If it's a single item (str or int), convert to string and add
+        else:
+            valid_targets.append(str(raw))
+            
+    # 2. HANDLE 'target_scores' (Dictionary)
     if 'target_scores' in example:
         scores = example['target_scores']
         max_score = max(scores.values())
-        valid_targets.extend([k for k, v in scores.items() if v == max_score])
-        
-        # ALSO: Get ALL options for the prompt (including wrong ones)
-        # This helps the agent see what it can choose from
+        valid_targets.extend([str(k) for k, v in scores.items() if v == max_score])
         all_options = list(scores.keys())
-    else:
-        all_options = valid_targets # Fallback
 
     print(f"\nTask {i+1}")
     
-    # 2. CONSTRUCT PROMPT (The Fix)
+    # 3. CONSTRUCT PROMPT
     input_text = example['input']
     
-    # We create a string like "Options: [Yes, No]"
-    options_display = ", ".join(f"'{opt}'" for opt in all_options)
-    
+    # Only show options if we actually have a multiple-choice dictionary
+    prompt_extras = ""
+    if all_options:
+        options_display = ", ".join(f"'{opt}'" for opt in all_options)
+        prompt_extras = f"AVAILABLE OPTIONS: [{options_display}]\n"
+
     full_prompt = (
-        "You are a logical reasoning expert taking a multiple-choice test.\n"
+        "You are a helpful assistant.\n"
         f"QUESTION: {input_text}\n"
-        f"AVAILABLE OPTIONS: [{options_display}]\n"
+        f"{prompt_extras}"
         "INSTRUCTIONS:\n"
-        "1. Analyze the scenario.\n"
-        "2. Select the best option from the list above.\n"
-        "3. Your FINAL line must be ONLY the exact option text (e.g. 'Yes').\n"
+        "1. Solve the problem.\n"
+        "2. Your FINAL line must be ONLY the answer (e.g., '5' or 'Yes').\n"
         "YOUR ANSWER:"
     )
 
-    # 3. SEND REQUEST
+    # 4. SEND REQUEST
     start = time.time()
     status = "FAIL"
     payload = {"prompt": full_prompt, "new_session": True}
@@ -117,22 +216,25 @@ for i, example in enumerate(examples):
             data = resp.json()
             raw_output = str(data.get("response", ""))
             
-            # 4. EXTRACTION & SCORING
+            # 5. EXTRACTION & SCORING
             agent_answer = robust_answer_extraction(raw_output)
             clean_agent = normalize_text(agent_answer)
             
             is_correct = False
             for t in valid_targets:
                 clean_target = normalize_text(t)
-                # Check for exact word match
-                if clean_target == clean_agent: # Strict match is safer now
+                
+                # Check 1: Exact Match (Safe for numbers like '3')
+                if clean_target == clean_agent:
                     is_correct = True
                     break
-                # Fallback: if agent says "Answer: Yes", clean_agent might be "yes"
-                elif clean_target in clean_agent.split():
+                
+                # Check 2: Word Match (e.g. "The answer is 3" contains "3")
+                # We split by spaces to ensure "13" doesn't match "3"
+                if clean_target in clean_agent.split():
                     is_correct = True
                     break
-            
+
             if is_correct:
                 status = "PASS"
             else:
