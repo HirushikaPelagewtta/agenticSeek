@@ -209,6 +209,8 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# benchmark files
 *.json
 arc_*.py
 output*.txt
+benchmarks/arc/data
