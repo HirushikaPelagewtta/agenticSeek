@@ -18,6 +18,7 @@ config = configparser.ConfigParser()
 config.read('config.ini')
 
 #.\.venv\Scripts\Activate.ps1
+# start start_services.cmd 
 
 async def main():
     pretty_print("Initializing...", color="status")

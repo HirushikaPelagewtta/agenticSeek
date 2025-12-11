@@ -1,3 +1,16 @@
+import sys
+import os
+
+# --- CRITICAL WINDOWS FIX ---
+# This forces the console to accept emojis (like 🎯) without crashing.
+# Must be the very first thing the script does.
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except AttributeError:
+    # Python < 3.7 or weird environments might not support this
+    pass
+
 import configparser
 import asyncio
 from fastapi import FastAPI, HTTPException
@@ -10,6 +23,10 @@ from sources.llm_provider import Provider
 from sources.interaction import Interaction
 from sources.agents import Agent, CoderAgent, CasualAgent, FileAgent, PlannerAgent, BrowserAgent, McpAgent
 from sources.browser import Browser, create_driver
+
+
+# $env:PYTHONIOENCODING = "utf-8"
+# python server.py
 
 # 1. INITIALIZATION
 print("--- SERVER STARTUP ---")
@@ -80,22 +97,22 @@ async def chat(query: Query):
             response_text = str(global_interaction.last_answer)
             
             # --- UNIVERSAL BLOCK UNPACKER (Fixes GAIA & ARC & HumanEval) ---
-            # If the response hides data behind "block:X", we pull it out.
             try:
                 blocks = global_interaction.get_last_blocks_result()
                 if blocks:
                     print(f"DEBUG: Found {len(blocks)} internal blocks.")
                     for block in blocks:
-                        # 1. Append Source Code (Good for HumanEval)
+                        # 1. Append Source Code
                         code_content = block.get('code', '')
                         if code_content:
                             response_text += f"\n\n```python\n{code_content}\n```"
                         
-                        # 2. Append Execution Output (CRITICAL FOR GAIA)
-                        # This extracts what the script printed (e.g., "17")
+                        # 2. Append Execution Output
                         output_content = str(block.get('output', ''))
                         if output_content:
-                            print(f"DEBUG: Appending tool output: {output_content[:20]}...")
+                            # Safe printing for debug logs (replaces errors with ?)
+                            safe_output = output_content.encode('utf-8', 'replace').decode('utf-8')
+                            print(f"DEBUG: Appending output: {safe_output[:50]}...")
                             response_text += f"\n\nOUTPUT:\n{output_content}"
             except Exception as e:
                 print(f"DEBUG: Block extraction warning: {e}")

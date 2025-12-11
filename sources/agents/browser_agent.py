@@ -18,7 +18,8 @@ class Action(Enum):
     GO_BACK = "GO_BACK"
     NAVIGATE = "NAVIGATE"
     SEARCH = "SEARCH"
-    
+    CLICK = "CLICK"
+
 class BrowserAgent(Agent):
     def __init__(self, name, prompt_path, provider, verbose=False, browser=None):
         """
@@ -61,6 +62,12 @@ class BrowserAgent(Agent):
         """Extract form written by the LLM in format [input_name](value)"""
         inputs = []
         matches = re.findall(r"\[\w+\]\([^)]+\)", text)
+        return matches
+    
+    def extract_click(self, text: str) -> List[str]:
+        """Extract click commands. Handles [CLICK](target) and [CLICK] (target)"""
+        # The \s* allows for optional spaces between ] and (
+        matches = re.findall(r"\[CLICK\]\s*\(([^)]+)\)", text)
         return matches
         
     def clean_links(self, links: List[str]) -> List[str]:
@@ -121,14 +128,16 @@ class BrowserAgent(Agent):
           - If the page is relevant, extract and summarize key information in concise notes (Note: <your note>)
           - If page not relevant, state: "Error: <specific reason the page does not address the query>" and either return to the previous page or navigate to a new link.
           - Notes should be factual, useful summaries of relevant content, they should always include specific names or link. Written as: "On <website URL>, <key fact 1>. <Key fact 2>. <Additional insight>." Avoid phrases like "the page provides" or "I found that."
-        2. **Navigate to a link by either: **
+        2. **Interact with the page (Prioritize if forms/buttons exist):**
+          - **Click elements:** Use [CLICK](exact text or selector) to toggle checkboxes, open dropdowns, or submit buttons.
+          - **Fill forms:** Use [field_name](value).
+             - Only fill forms if relevant to the user request.
+             - If the user provided specific login credentials, USE THEM.
+             - If you lack specific information (e.g., user email), LEAVE IT EMPTY. Do not invent data.
+             - If creating an account, write the generated password in a Note.
+        3. **Navigate to a link by either: **
           - Saying I will navigate to (write down the full URL) www.example.com/cats
           - Going back: If no link seems helpful, say: {Action.GO_BACK.value}.
-        3. **Fill forms on the page:**
-          - Fill form only when relevant.
-          - Use Login if username/password specified by user. For quick task create account, remember password in a note.
-          - You can fill a form using [form_name](value). Don't {Action.GO_BACK.value} when filling form.
-          - If a form is irrelevant or you lack informations (eg: don't know user email) leave it empty.
         4. **Decide if you completed the task**
           - Check your notes. Do they fully answer the question? Did you verify with multiple pages?
           - Are you sure it’s correct?
@@ -367,6 +376,34 @@ class BrowserAgent(Agent):
             self.last_answer = answer
             pretty_print('▂'*32, color="status")
 
+            # --- START NEW CLICK LOGIC ---
+            clicks = self.extract_click(answer)
+            if len(clicks) > 0:
+                self.status_message = "Interacting with page..."
+                self.last_action = Action.CLICK.value
+                target = clicks[0]
+                pretty_print(f"Clicking element: {target}", color="status")
+                
+                # Execute the click
+                click_success = self.browser.click_element(target)
+                
+                # Update prompt with result (Feedback Loop)
+                page_text = self.get_page_text(limit_to_model_ctx=True)
+                if click_success:
+                    result_msg = f"SUCCESS: I clicked '{target}'. The page content updated."
+                else:
+                    result_msg = f"ERROR: Could not click '{target}'. Element not found or not interactable."
+                
+                # Re-prompt the LLM with the new state
+                prompt = self.make_navigation_prompt(user_prompt, page_text)
+                prompt += f"\n\nSYSTEM UPDATE: {result_msg}"
+                
+                # Skip to next turn (don't try to navigate or fill forms yet)
+                # We need a new decision based on the clicked state.
+                answer, reasoning = await self.llm_decide(prompt, show_reasoning=False)
+                continue 
+            # --- END NEW CLICK LOGIC ---
+
             extracted_form = self.extract_form(answer)
             if len(extracted_form) > 0:
                 self.status_message = "Filling web form..."
@@ -432,6 +469,13 @@ class BrowserAgent(Agent):
         self.status_message = "Ready"
         self.last_answer = answer
         return answer, reasoning
+
+# 3. **Fill forms on the page:**
+#     - Fill form only when relevant.
+#     - Use Login if username/password specified by user. For quick task create account, remember password in a note.
+#     - You can fill a form using [form_name](value). Don't {Action.GO_BACK.value} when filling form.
+#     - If a form is irrelevant or you lack informations (eg: don't know user email) leave it empty.
+
 
 if __name__ == "__main__":
     pass

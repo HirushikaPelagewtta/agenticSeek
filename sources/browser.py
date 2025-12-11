@@ -4,7 +4,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import TimeoutException, WebDriverException, ElementClickInterceptedException
 from selenium.webdriver.common.action_chains import ActionChains
 from typing import List, Tuple, Type, Dict
 from bs4 import BeautifulSoup
@@ -273,7 +273,48 @@ class Browser:
     def switch_control_tab(self):
         self.logger.log("Switching to control tab.")
         self.driver.switch_to.window(self.tabs[0])
+    
+    def click_element(self, selector_or_text: str) -> bool:
+        """
+        Attempts to click an element by text, ID, or CSS selector using Selenium.
+        Returns True if successful, False otherwise.
+        """
+        # The agent might give us "Login" or "Submit" or "#login-btn"
+        targets = [
+            (By.LINK_TEXT, selector_or_text),           # Precise link text
+            (By.PARTIAL_LINK_TEXT, selector_or_text),   # "Log" matches "Login"
+            (By.XPATH, f"//*[contains(text(), '{selector_or_text}')]"), # Any element with this text
+            (By.XPATH, f"//*[@value='{selector_or_text}']"), # Buttons with value="Login"
+            (By.ID, selector_or_text),                  # IDs
+            (By.CSS_SELECTOR, selector_or_text)         # CSS Selectors
+        ]
+
+        for method, selector in targets:
+            try:
+                # Wait up to 2 seconds for the element to be clickable
+                element = WebDriverWait(self.driver, 2).until(
+                    EC.element_to_be_clickable((method, selector))
+                )
+                
+                # Scroll into view (Crucial for Selenium)
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+                
+                # Try standard click
+                element.click()
+                return True
             
+            except ElementClickInterceptedException:
+                # Fallback: JavaScript click (Force click if obscured)
+                try:
+                    self.driver.execute_script("arguments[0].click();", element)
+                    return True
+                except:
+                    continue
+            except Exception:
+                continue
+                
+        return False
+    
     def load_anticatpcha_manually(self):
         pretty_print("You might want to install the AntiCaptcha extension for captchas.", color="warning")
         try:
